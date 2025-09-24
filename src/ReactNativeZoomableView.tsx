@@ -47,6 +47,7 @@ class ReactNativeZoomableView extends Component<
   ReactNativeZoomableViewState
 > {
   zoomSubjectWrapperRef: RefObject<View>;
+  innerContentRef: RefObject<View>;
   gestureHandlers: any;
   doubleTapFirstTapReleaseTimestamp: number;
 
@@ -119,6 +120,8 @@ class ReactNativeZoomableView extends Component<
   private currentVx: number | undefined;
   private lastMouseMoveTs: number | undefined;
 
+  private isMouseOverContent: boolean = false;
+
   constructor(props) {
     super(props);
 
@@ -151,6 +154,7 @@ class ReactNativeZoomableView extends Component<
     });
 
     this.zoomSubjectWrapperRef = createRef<View>();
+    this.innerContentRef = createRef<View>();
 
     if (this.props.zoomAnimatedValue)
       this.zoomAnim = this.props.zoomAnimatedValue;
@@ -183,6 +187,9 @@ class ReactNativeZoomableView extends Component<
     this.mouseUpListener = this.mouseUpListener.bind(this);
     this.mouseMoveListener = this.mouseMoveListener.bind(this);
     this.wheelListener = this.wheelListener.bind(this);
+
+    this.mouseEnterListener = this.mouseEnterListener.bind(this);
+    this.mouseLeaveListener = this.mouseLeaveListener.bind(this);
 
     this.setupWebRightClick();
   }
@@ -251,6 +258,9 @@ class ReactNativeZoomableView extends Component<
   }
 
   private wheelListener(e: WheelEvent) {
+    if (!this.isMouseOverContent) {
+      return;
+    }
     const knownGoodDelta = 109;
     let wheelDelta = e.deltaY;
     if (wheelDelta < 0) {
@@ -275,6 +285,37 @@ class ReactNativeZoomableView extends Component<
     }
   }
 
+  private mouseEnterListener(e: MouseEvent) {
+    this.isMouseOverContent = true;
+  }
+  private mouseLeaveListener(e: MouseEvent) {
+    this.isMouseOverContent = false;
+  }
+
+  private setupMouseHoverListeners() {
+    if (!this.innerContentRef.current) {
+      return;
+    }
+
+    const containerElement = this.innerContentRef.current as any;
+    let domElement = null;
+
+    // Try different ways to get the DOM element for React Native Web
+    if (containerElement._nativeTag) {
+      domElement = containerElement._nativeTag;
+    } else if (containerElement.getInnerViewNode) {
+      domElement = containerElement.getInnerViewNode();
+    } else {
+      domElement = containerElement;
+    }
+
+    if (domElement && domElement.addEventListener) {
+      domElement.addEventListener('mouseenter', this.mouseEnterListener);
+      domElement.addEventListener('mouseleave', this.mouseLeaveListener);
+    } else {
+    }
+  }
+
   private setupWebRightClick() {
     if (Platform.OS !== 'web') {
       return;
@@ -284,6 +325,7 @@ class ReactNativeZoomableView extends Component<
     window.addEventListener('mousedown', this.mouseDownListener);
     window.addEventListener('mouseup', this.mouseUpListener);
     window.addEventListener('mousemove', this.mouseMoveListener);
+
   }
 
   private createFakeEvents(e: MouseEvent) {
@@ -424,6 +466,14 @@ class ReactNativeZoomableView extends Component<
       this.grabZoomSubjectOriginalMeasurements,
       1e3
     );
+
+    // Add mouse enter/leave listeners to the container element for web
+    if (Platform.OS === 'web') {
+      // Use setTimeout to ensure DOM element is available
+      setTimeout(() => {
+        this.setupMouseHoverListeners();
+      }, 0);
+    }
   }
 
   componentWillUnmount() {
@@ -434,6 +484,25 @@ class ReactNativeZoomableView extends Component<
       window.removeEventListener('mousedown', this.mouseDownListener);
       window.removeEventListener('mousemove', this.mouseMoveListener);
       window.removeEventListener('wheel', this.wheelListener);
+
+      // Remove mouse hover listeners from inner content View
+      if (this.innerContentRef.current) {
+        const containerElement = this.innerContentRef.current as any;
+        let domElement = null;
+
+        if (containerElement._nativeTag) {
+          domElement = containerElement._nativeTag;
+        } else if (containerElement.getInnerViewNode) {
+          domElement = containerElement.getInnerViewNode();
+        } else {
+          domElement = containerElement;
+        }
+
+        if (domElement && domElement.removeEventListener) {
+          domElement.removeEventListener('mouseenter', this.mouseEnterListener);
+          domElement.removeEventListener('mouseleave', this.mouseLeaveListener);
+        }
+      }
     }
   }
 
@@ -1229,7 +1298,11 @@ class ReactNativeZoomableView extends Component<
             },
           ]}
         >
+          <View
+            ref={this.innerContentRef}
+          >
           {this.props.children}
+          </View>
         </Animated.View>
         {this.props.visualTouchFeedbackEnabled &&
           this.state.touches?.map((touch) => {
