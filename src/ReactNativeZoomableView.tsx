@@ -40,7 +40,6 @@ const initialState = {
   originalPageY: null,
 } as ReactNativeZoomableViewState;
 
-const MOUSE_LEFT = 0;
 const MOUSE_RIGHT = 2;
 
 class ReactNativeZoomableView extends Component<
@@ -48,6 +47,7 @@ class ReactNativeZoomableView extends Component<
   ReactNativeZoomableViewState
 > {
   zoomSubjectWrapperRef: RefObject<View>;
+  innerContentRef: RefObject<View>;
   gestureHandlers: any;
   doubleTapFirstTapReleaseTimestamp: number;
 
@@ -88,13 +88,12 @@ class ReactNativeZoomableView extends Component<
     },
   };
 
-  
   /**
    * This just keeps track of what the zoom level was set to. The `zoomLevel` variable
    * is what the zoom level is currently, even while changing the zoom.
    */
   private zoomLevelWithoutMovement: number | undefined;
-  
+
   private zoomLevel = 1;
   private lastGestureCenterPosition: { x: number; y: number } = null;
   private lastGestureTouchDistance: number;
@@ -112,9 +111,7 @@ class ReactNativeZoomableView extends Component<
   private doubleTapFirstTap: TouchPoint;
   private measureZoomSubjectInterval: NodeJS.Timer;
 
-  public mouseRightHeldDown: boolean = false;
-  public mouseLeftHeldDown: boolean = false;
-
+  private mouseRightHeldDown: boolean = false;
   private initialXPos: number | undefined;
   private initialYPos: number | undefined;
   private currentDx: number | undefined;
@@ -122,6 +119,8 @@ class ReactNativeZoomableView extends Component<
   private currentVy: number | undefined;
   private currentVx: number | undefined;
   private lastMouseMoveTs: number | undefined;
+
+  private isMouseOverContent: boolean = false;
 
   constructor(props) {
     super(props);
@@ -155,6 +154,7 @@ class ReactNativeZoomableView extends Component<
     });
 
     this.zoomSubjectWrapperRef = createRef<View>();
+    this.innerContentRef = createRef<View>();
 
     if (this.props.zoomAnimatedValue)
       this.zoomAnim = this.props.zoomAnimatedValue;
@@ -188,14 +188,15 @@ class ReactNativeZoomableView extends Component<
     this.mouseMoveListener = this.mouseMoveListener.bind(this);
     this.wheelListener = this.wheelListener.bind(this);
 
+    this.mouseEnterListener = this.mouseEnterListener.bind(this);
+    this.mouseLeaveListener = this.mouseLeaveListener.bind(this);
+
     this.setupWebRightClick();
   }
 
   private mouseDownListener(e: MouseEvent) {
-if(e.button === MOUSE_RIGHT) {
-     this.mouseRightHeldDown = true;
-    } else if(e.button === MOUSE_LEFT) {
-      this.mouseLeftHeldDown = true;
+    if (e.button !== MOUSE_RIGHT) {
+      return;
     }
 
     this.initialXPos = e.x;
@@ -208,31 +209,28 @@ if(e.button === MOUSE_RIGHT) {
       this.createFakeEvents(e);
 
     this._handlePanResponderGrant(panResponderEvent, gestureResponseEvent);
- 
+    this.mouseRightHeldDown = true;
   }
 
   private mouseUpListener(e: MouseEvent) {
-    if (e.button === MOUSE_RIGHT) {
-          this.mouseRightHeldDown = false;
-    } else if (e.button === MOUSE_LEFT) {
-      this.mouseLeftHeldDown = false;
+    if (e.button !== MOUSE_RIGHT) {
+      return;
     }
 
     const { panResponderEvent, gestureResponseEvent } =
       this.createFakeEvents(e);
     this._handlePanResponderEnd(panResponderEvent, gestureResponseEvent);
+    this.mouseRightHeldDown = false;
   }
 
   private mouseMoveListener(e: MouseEvent) {
     if (
- 
+      !this.mouseRightHeldDown ||
       isNil(this.initialYPos) ||
       isNil(this.initialXPos)
     ) {
       return;
     }
-
-    if (this.mouseRightHeldDown || this.mouseLeftHeldDown) {
 
     const newDy = e.y - this.initialYPos;
     const newDx = e.x - this.initialXPos;
@@ -258,9 +256,11 @@ if(e.button === MOUSE_RIGHT) {
     this.currentDx = newDx;
     this.currentDy = newDy;
   }
-  }
 
   private wheelListener(e: WheelEvent) {
+    if (!this.isMouseOverContent) {
+      return;
+    }
     const knownGoodDelta = 109;
     let wheelDelta = e.deltaY;
     if (wheelDelta < 0) {
@@ -285,6 +285,37 @@ if(e.button === MOUSE_RIGHT) {
     }
   }
 
+  private mouseEnterListener(e: MouseEvent) {
+    this.isMouseOverContent = true;
+  }
+  private mouseLeaveListener(e: MouseEvent) {
+    this.isMouseOverContent = false;
+  }
+
+  private setupMouseHoverListeners() {
+    if (!this.innerContentRef.current) {
+      return;
+    }
+
+    const containerElement = this.innerContentRef.current as any;
+    let domElement = null;
+
+    // Try different ways to get the DOM element for React Native Web
+    if (containerElement._nativeTag) {
+      domElement = containerElement._nativeTag;
+    } else if (containerElement.getInnerViewNode) {
+      domElement = containerElement.getInnerViewNode();
+    } else {
+      domElement = containerElement;
+    }
+
+    if (domElement && domElement.addEventListener) {
+      domElement.addEventListener('mouseenter', this.mouseEnterListener);
+      domElement.addEventListener('mouseleave', this.mouseLeaveListener);
+    } else {
+    }
+  }
+
   private setupWebRightClick() {
     if (Platform.OS !== 'web') {
       return;
@@ -294,6 +325,7 @@ if(e.button === MOUSE_RIGHT) {
     window.addEventListener('mousedown', this.mouseDownListener);
     window.addEventListener('mouseup', this.mouseUpListener);
     window.addEventListener('mousemove', this.mouseMoveListener);
+
   }
 
   private createFakeEvents(e: MouseEvent) {
@@ -434,6 +466,14 @@ if(e.button === MOUSE_RIGHT) {
       this.grabZoomSubjectOriginalMeasurements,
       1e3
     );
+
+    // Add mouse enter/leave listeners to the container element for web
+    if (Platform.OS === 'web') {
+      // Use setTimeout to ensure DOM element is available
+      setTimeout(() => {
+        this.setupMouseHoverListeners();
+      }, 0);
+    }
   }
 
   componentWillUnmount() {
@@ -444,6 +484,25 @@ if(e.button === MOUSE_RIGHT) {
       window.removeEventListener('mousedown', this.mouseDownListener);
       window.removeEventListener('mousemove', this.mouseMoveListener);
       window.removeEventListener('wheel', this.wheelListener);
+
+      // Remove mouse hover listeners from inner content View
+      if (this.innerContentRef.current) {
+        const containerElement = this.innerContentRef.current as any;
+        let domElement = null;
+
+        if (containerElement._nativeTag) {
+          domElement = containerElement._nativeTag;
+        } else if (containerElement.getInnerViewNode) {
+          domElement = containerElement.getInnerViewNode();
+        } else {
+          domElement = containerElement;
+        }
+
+        if (domElement && domElement.removeEventListener) {
+          domElement.removeEventListener('mouseenter', this.mouseEnterListener);
+          domElement.removeEventListener('mouseleave', this.mouseLeaveListener);
+        }
+      }
     }
   }
 
@@ -1136,7 +1195,11 @@ if(e.button === MOUSE_RIGHT) {
    *
    * @return {Promise<bool>}
    */
-  async zoomTo(newZoomLevel: number, x: number = 0, y: number = 0): Promise<boolean> {
+  async zoomTo(
+    newZoomLevel: number,
+    x: number = 0,
+    y: number = 0
+  ): Promise<boolean> {
     if (
       // if we would go out of our min/max limits -> abort
       newZoomLevel > this.props.maxZoom ||
@@ -1235,7 +1298,11 @@ if(e.button === MOUSE_RIGHT) {
             },
           ]}
         >
+          <View
+            ref={this.innerContentRef}
+          >
           {this.props.children}
+          </View>
         </Animated.View>
         {this.props.visualTouchFeedbackEnabled &&
           this.state.touches?.map((touch) => {
